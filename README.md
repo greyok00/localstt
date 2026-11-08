@@ -13,6 +13,8 @@ own GPU, via [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
 [![CI](https://img.shields.io/badge/CI-ruff%20%2B%20pytest-2563EB)](.github/workflows/ci.yml)
 [![Platform](https://img.shields.io/badge/platform-Linux%20X11-1a1a2e)](#what-is-localstt)
 
+<img src="docs/popup.png" width="360" alt="LocalSTT control popup: Toggle STT, Enter, VAD status">
+
 <sub><a href="#what-is-localstt">About</a> · <a href="#install">Install</a> · <a href="#use">Use</a> · <a href="#config">Config</a> · <a href="#privacy">Privacy</a></sub>
 
 </div>
@@ -86,6 +88,9 @@ host on first use.
 
 ## Development
 
-Built with AI assistance and verified by tests and CI. Third-party
-components are listed in [THIRD_PARTY.md](THIRD_PARTY.md).
+Built with AI assistance and verified by tests and CI.
+
+Third-party components: [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+(MIT) for transcription and the [Whisper](https://github.com/openai/whisper) models
+(MIT) it loads; typing uses [xdotool](https://github.com/jordansissel/xdotool).
 Apache-2.0; see [LICENSE](LICENSE).
