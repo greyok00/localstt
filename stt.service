@@ -1,0 +1,24 @@
+[Unit]
+Description=STT tray — local voice dictation system tray
+# Standalone. This tray owns the STT daemon (stt/daemon.py) and does NOT
+# depend on or supervise any other agent daemon.
+After=network.target graphical-session.target
+
+[Service]
+Type=simple
+# stt/tray.py runs as a pystray icon, supervises the STT daemon, and
+# exposes Open/Close STT Controls + Quit. Falls back to a headless stdin
+# keeper if pystray isn't installed.
+ExecStart={{PYTHON}} -m stt.tray
+WorkingDirectory={{REPO_ROOT}}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+Environment=STT_STATE_DIR=%h/.stt/state
+# X11 single-seat default; for Wayland/multi-seat run instead:
+#   systemctl --user import-environment DISPLAY XAUTHORITY
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=%h/.Xauthority
+
+[Install]
+WantedBy=graphical-session.target

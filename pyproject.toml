@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "localstt"
+version = "0.1.1"
+description = "Local speech-to-text: faster-whisper daemon with a mouse-only control popup"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "faster-whisper>=1.0",
+    "numpy",
+    "sounddevice>=0.4",
+    "pynput>=1.7",
+]
+
+[project.optional-dependencies]
+tray = ["pystray", "pillow"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+stt-daemon = "stt.daemon:main"
+stt-controls = "stt.controls:main"
+
+[tool.setuptools]
+packages = ["stt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E9", "F"]
