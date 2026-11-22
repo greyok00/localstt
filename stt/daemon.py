@@ -14,6 +14,7 @@ import argparse
 import queue
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -31,18 +32,29 @@ STATE_FILE = CFG.state_dir / "stt_daemon.json"
 SOCKET_PATH = CFG.state_dir / "stt.sock"
 
 
+_state_lock = threading.Lock()
+
+
 def _write_state(**updates) -> None:
     import json
 
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    state = {}
-    if STATE_FILE.exists():
-        try:
-            state = json.loads(STATE_FILE.read_text())
-        except Exception:
-            state = {}
-    state.update(updates)
-    STATE_FILE.write_text(json.dumps(state, indent=2))
+    # Lock the read-modify-write: the socket server thread (set-mode, stop)
+    # and the main thread (startup, shutdown) can both land here, and two
+    # interleaved read-update-write cycles would clobber each other's keys.
+    with _state_lock:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        state = {}
+        if STATE_FILE.exists():
+            try:
+                state = json.loads(STATE_FILE.read_text())
+            except Exception:
+                state = {}
+        state.update(updates)
+        # Write to a temp file and rename so a killed daemon can't leave a
+        # half-written state file behind.
+        tmp = STATE_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state, indent=2))
+        tmp.replace(STATE_FILE)
 
 
 def _read_state() -> dict:
@@ -722,6 +734,8 @@ def run_hotkey(mode_event=None, stop_event=None) -> None:
     listener = HotkeyListener(
         combo, on_start=_start_recording, on_stop=_stop_recording, mode_event=mode_event
     )
+    global _hotkey_listener
+    _hotkey_listener = listener
     with keyboard.Listener(on_press=listener.on_press, on_release=listener.on_release) as kl:
         while not (stop_event and stop_event.is_set()):
             kl.join(timeout=0.5)
@@ -730,10 +744,18 @@ def run_hotkey(mode_event=None, stop_event=None) -> None:
 
 _recorder = {"stream": None, "frames": []}
 
+# Set for the whole span of a hotkey-held recording; vad_capture checks it so
+# the same speech is not captured twice (once per path) in "both" mode.
+_hotkey_recording = threading.Event()
+
+# The live hotkey listener, kept so a mode switch can reset its state.
+_hotkey_listener: HotkeyListener | None = None
+
 
 def _start_recording() -> None:
     import sounddevice as sd
 
+    _hotkey_recording.set()
     _recorder["frames"] = []
     _recorder["stream"] = sd.InputStream(
         samplerate=SAMPLE_RATE,
@@ -754,6 +776,7 @@ def _stop_recording() -> None:
     stream = _recorder.get("stream")
     if stream is None:
         return
+    _hotkey_recording.clear()
     stream.stop()
     stream.close()
     _recorder["stream"] = None
@@ -761,6 +784,30 @@ def _stop_recording() -> None:
         clip = np.concatenate(_recorder["frames"])[:, 0]
         print("⏹ transcribing…", flush=True)
         _handle_clip(clip)
+
+
+def _abort_hotkey_recording() -> None:
+    """Force-stop an in-flight hotkey recording without transcribing it.
+
+    Used when hotkey mode is switched off while the combo is still held: the
+    listener drops the release event, so without this the mic stream would
+    stay open and buffer frames until the daemon exits, and the stale
+    ``active`` flag would corrupt the next hold after re-enabling.
+    """
+    stream = _recorder.get("stream")
+    if stream is not None:
+        try:
+            stream.stop()
+            stream.close()
+        except Exception:
+            pass
+        _recorder["stream"] = None
+    _recorder["frames"] = []
+    _hotkey_recording.clear()
+    listener = _hotkey_listener
+    if listener is not None:
+        listener.pressed.clear()
+        listener.active = False
 
 
 def rms(samples: np.ndarray) -> float:
@@ -812,6 +859,16 @@ def vad_capture(on_clip, stop_event=None, mode_event=None, block_sec: float = 0.
                 while not (stop_event and stop_event.is_set()):
                     data, _ = stream.read(block)
                     if mode_event is not None and not mode_event.is_set():
+                        in_speech = False
+                        speech = []
+                        speech_blocks = 0
+                        silence_blocks = 0
+                        continue
+                    if _hotkey_recording.is_set():
+                        # A hotkey recording owns this audio right now: drop
+                        # the blocks so "both" mode doesn't transcribe the
+                        # same speech a second time once the hotkey clip and
+                        # the VAD clip both reach the queue.
                         in_speech = False
                         speech = []
                         speech_blocks = 0
@@ -907,6 +964,7 @@ def _socket_server(stop_event, mode_events) -> None:
                             mode_events["hotkey"].set()
                         else:
                             mode_events["hotkey"].clear()
+                            _abort_hotkey_recording()
                         if modes["vad"]:
                             mode_events["vad"].set()
                         else:
@@ -957,6 +1015,9 @@ def run() -> int:
     stop_event = threading.Event()
     mode_events = {"hotkey": threading.Event(), "vad": threading.Event()}
 
+    # Both capture modes come up enabled: the hotkey listener is the feature
+    # the README leads with, and STT_SPEAK gates VAD (the historical default).
+    mode_events["hotkey"].set()
     if CFG.stt_speak_to_capture:
         mode_events["vad"].set()
     threads = [

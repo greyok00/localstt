@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -45,6 +46,12 @@ if not sys.stderr.isatty():
 
 _STT_DAEMON = _REPO_ROOT / "stt" / "daemon.py"
 
+# Match the exact launch shape (``<python> -u <repo>/stt/daemon.py``) rather
+# than a bare path substring: pgrep/pkill -f match anywhere in the command
+# line, so an editor or pager holding that file open would otherwise count as
+# the daemon (and get SIGTERMed by the stop path).
+_DAEMON_PATTERN = re.escape(sys.executable) + r" -u " + re.escape(str(_STT_DAEMON))
+
 _LABEL_OPEN = "Open STT Controls"
 _LABEL_CLOSE = "Close STT Controls"
 
@@ -66,9 +73,7 @@ def _daemon_alive() -> bool:
         except (ValueError, ProcessLookupError, OSError):
             pass
     try:
-        r = subprocess.run(
-            ["pgrep", "-f", "stt/daemon.py"], capture_output=True, text=True, timeout=2
-        )
+        r = subprocess.run(["pgrep", "-f", _DAEMON_PATTERN], capture_output=True, text=True, timeout=2)
         return bool((r.stdout or "").strip())
     except Exception:
         return False
@@ -107,8 +112,8 @@ def _daemon_stop() -> bool:
             _log("STT daemon stopped", "✅", GREEN)
             return True
         time.sleep(0.5)
-    # Last resort: kill by process pattern.
-    subprocess.run(["pkill", "-f", "stt/daemon.py"], capture_output=True, timeout=5)
+    # Last resort: kill by the daemon's exact launch pattern.
+    subprocess.run(["pkill", "-f", _DAEMON_PATTERN], capture_output=True, timeout=5)
     return not _daemon_alive()
 
 
@@ -218,16 +223,44 @@ def _run_gui(quit_event: threading.Event) -> None:
 
     _refresh_tick()
 
-    icon.run()
+    try:
+        # run_detached keeps this (main) thread free to run Python, so the
+        # SIGINT/SIGTERM handlers installed in run() can fire and set
+        # quit_event. Inside a blocking icon.run() the interpreter never
+        # reaches a bytecode boundary to run them, so signals were ignored
+        # until the menu Quit was used.
+        icon.run_detached()
+    except ValueError:
+        # Backend without detached support: block in the icon loop as before
+        # (only the menu Quit can exit from here).
+        _log("detached tray unsupported — blocking icon loop", "", YELLOW)
+        icon.run()
+        return
+    try:
+        quit_event.wait()
+    finally:
+        try:
+            icon.stop()
+        except Exception:
+            pass
 
 
 def _run_headless(quit_event: threading.Event) -> None:
+    import select
+
     print(f"{DIM}stt-tray — headless mode. keys: q=quit, s=status{RST}")
     while not quit_event.is_set():
+        # Wait on stdin with a timeout instead of a blocking readline: a
+        # signal handler only sets quit_event, and PEP 475 would silently
+        # retry the interrupted read, so SIGINT/SIGTERM could never break
+        # the loop and the daemon would never be cleaned up.
         try:
-            line = sys.stdin.readline()
+            ready, _, _ = select.select([sys.stdin], [], [], 0.5)
         except KeyboardInterrupt:
             break
+        if not ready:
+            continue
+        line = sys.stdin.readline()
         if not line:
             time.sleep(0.5)
             continue

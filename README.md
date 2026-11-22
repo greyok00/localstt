@@ -32,18 +32,24 @@ yourself, still on `127.0.0.1`, off by default.
 
 Two capture modes, combinable: **hotkey** (hold `<ctrl>+<shift>+space`,
 release to transcribe) and **VAD** (the daemon transcribes when you stop
-talking). Linux + X11 required for typing; an NVIDIA GPU is recommended, a
-CPU works but is slower.
+talking). Both are on when the daemon starts — hold the hotkey or just
+speak; `set-mode` / the popup can turn either one off (`STT_SPEAK` controls
+whether VAD is on at start). Linux + X11 required for typing; an NVIDIA GPU
+is recommended, a CPU works but is slower.
 
 ## Install
 
 ```bash
 sudo apt install xdotool   # typing backend
-pip install localstt       # or: pip install -e .
-pip install "localstt[tray]"   # optional: tray icon
+git clone https://github.com/greyok00/localstt.git
+cd localstt
+pip install -e .           # add ",tray" for the tray icon: pip install -e ".[tray]"
 stt-daemon start
 stt-controls               # open the control popup
 ```
+
+There is no PyPI package yet, so the install is from a clone with an
+editable install.
 
 The popup auto-starts the daemon when it needs one. A systemd user unit
 (`stt.service`) is included if you want the tray to start with your session.
@@ -70,6 +76,7 @@ small INI at `~/.stt/stt.conf` (`[stt]` section); env wins.
 | whisper model | `STT_MODEL` | `base` |
 | device | `STT_DEVICE` | `cuda` |
 | hotkey | `STT_HOTKEY` | `<ctrl>+<shift>+space` |
+| VAD capture on at start | `STT_SPEAK` | `on` |
 | VAD threshold | `STT_VAD_THRESHOLD` | `0.05` |
 | silence limit (s) | `STT_VAD_SILENCE` | `1.5` |
 | max utterance (s) | `STT_VAD_MAX_UTTERANCE` | `10.0` |
